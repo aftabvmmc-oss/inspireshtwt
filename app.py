@@ -151,18 +151,42 @@ st.subheader("Data Quality: Missing Anthropometry Metrics")
 st.markdown("Displays counts of participants where height or weight is missing in **both** Enrolment and Outcome forms.")
 
 # Dynamic Metric Cards
+# Dynamic Summary Table
 if not selected_cities:
     st.info("Please select at least one site from the sidebar.")
 else:
-    cols = st.columns(len(selected_cities))
-    for idx, city in enumerate(selected_cities):
+    # Build a summary dataframe for the selected sites
+    summary_data = []
+    for city in selected_cities:
         city_data = filtered_df[filtered_df['City'] == city]
-        missing_height = city_data['Height_Missing'].sum()
-        missing_weight = city_data['Weight_Missing'].sum()
+        summary_data.append({
+            "Site (City)": city,
+            "Missing Height": int(city_data['Height_Missing'].sum()),
+            "Missing Weight": int(city_data['Weight_Missing'].sum()),
+            "Missing Either (Ht/Wt)": int(city_data['MISSING Ht/wt'].sum())
+        })
+    
+    summary_df = pd.DataFrame(summary_data)
+    
+    # Append a Total row for quick overview
+    if not summary_df.empty:
+        total_row = pd.DataFrame([{
+            "Site (City)": "TOTAL",
+            "Missing Height": summary_df["Missing Height"].sum(),
+            "Missing Weight": summary_df["Missing Weight"].sum(),
+            "Missing Either (Ht/Wt)": summary_df["Missing Either (Ht/Wt)"].sum()
+        }])
+        summary_df = pd.concat([summary_df, total_row], ignore_index=True)
         
-        with cols[idx]:
-            st.metric(label=f"{city} - Missing Height", value=int(missing_height))
-            st.metric(label=f"{city} - Missing Weight", value=int(missing_weight))
+        # Apply slight styling to highlight the Total row
+        def style_total_row(row):
+            if row['Site (City)'] == 'TOTAL':
+                return ['background-color: #f0f2f6; font-weight: bold'] * len(row)
+            return [''] * len(row)
+            
+        styled_summary = summary_df.style.apply(style_total_row, axis=1)
+        
+        st.dataframe(styled_summary, use_container_width=True, hide_index=True)
 
 st.divider()
 
