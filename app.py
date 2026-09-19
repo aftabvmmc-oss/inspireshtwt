@@ -11,11 +11,10 @@ import streamlit as st
 st.set_page_config(page_title="INSPIRES Study: Anthropometry Tracker", layout="wide")
 st.title("INSPIRES Study: Height & Weight Dashboard")
 
-# --- 2. Data Fetching Logic (Matched to working script) ---
+# --- 2. Data Fetching Logic ---
 @st.cache_data(ttl=43200)
 def fetch_odk_data(form_id):
     """Fetches CSV submission data for a given form ID using the proven session token method."""
-    # Fallback to st.secrets if os.environ is empty
     if "api_credentials" in st.secrets:
         creds = st.secrets["api_credentials"]
         ODK_URL = "https://odk.thsti.in"
@@ -33,7 +32,6 @@ def fetch_odk_data(form_id):
         return pd.DataFrame()
 
     try:
-        # 1. Get Session Token
         session_resp = requests.post(
             f"{ODK_URL}/v1/sessions",
             json={"email": ODK_EMAIL, "password": ODK_PASSWORD}
@@ -41,7 +39,6 @@ def fetch_odk_data(form_id):
         session_resp.raise_for_status()
         token = session_resp.json().get("token")
         
-        # 2. Fetch CSV Data
         clean_form_id = urllib.parse.unquote(form_id)
         encoded_form_id = urllib.parse.quote(clean_form_id)
         
@@ -61,69 +58,58 @@ def process_anthropometry_data(enr_df, out_df):
     if enr_df.empty:
         return pd.DataFrame()
 
-    # --- Find Enrolment Columns (with fallback for - vs . formatting) ---
     id_col_enr = 'ENR_BINFO-C_8' if 'ENR_BINFO-C_8' in enr_df.columns else 'ENR_BINFO-C.8'
     site_col_enr = 'ENR_BINFO-Q1_2' if 'ENR_BINFO-Q1_2' in enr_df.columns else 'ENR_BINFO-Q1.2'
     ht_col_enr = 'ENR_FAHA-Q3_5_1' if 'ENR_FAHA-Q3_5_1' in enr_df.columns else 'ENR_FAHA-Q3.5.1'
     wt_col_enr = 'ENR_FAHA-Q3_6_1' if 'ENR_FAHA-Q3_6_1' in enr_df.columns else 'ENR_FAHA-Q3.6.1'
-    
-    sub_col_enr = next((c for c in enr_df.columns if c.lower() in ['submittername', 'username']), None)
-    date_col_enr = next((c for c in enr_df.columns if c.lower() == 'today'), 'SubmissionDate')
 
-    # Standardize Enrolment DataFrame
     std_enr = pd.DataFrame()
-    std_enr['Participant_ID'] = enr_df[id_col_enr].astype(str).str.strip().str.upper() if id_col_enr in enr_df.columns else pd.Series(dtype=str)
+    std_enr['Participant ID'] = enr_df[id_col_enr].astype(str).str.strip().str.upper() if id_col_enr in enr_df.columns else pd.Series(dtype=str)
     std_enr['Site_Code'] = enr_df[site_col_enr] if site_col_enr in enr_df.columns else np.nan
     std_enr['ENR_Height'] = pd.to_numeric(enr_df[ht_col_enr], errors='coerce') if ht_col_enr in enr_df.columns else np.nan
     std_enr['ENR_Weight'] = pd.to_numeric(enr_df[wt_col_enr], errors='coerce') if wt_col_enr in enr_df.columns else np.nan
-    std_enr['SubmitterName'] = enr_df[sub_col_enr] if sub_col_enr else "Unknown"
-    std_enr['today'] = enr_df[date_col_enr] if date_col_enr in enr_df.columns else np.nan
 
-    # Map Sites
     site_mapping = {
         "NC": "NCT DELHI", "JO": "JODHPUR", "GU": "GUWAHATI",
         "KO": "KOLKATA", "CH": "CHENNAI", "PU": "PUNE"
     }
     std_enr['City'] = std_enr['Site_Code'].map(site_mapping)
 
-    # --- Find Outcome Columns ---
     std_out = pd.DataFrame()
     if not out_df.empty:
         id_col_out = 'OUT-P_ID' if 'OUT-P_ID' in out_df.columns else 'OUT-P.ID'
         ht_col_out = 'OUT-Q1_11_1a' if 'OUT-Q1_11_1a' in out_df.columns else 'OUT-Q1.11.1a'
         wt_col_out = 'OUT-Q1_12_1a' if 'OUT-Q1_12_1a' in out_df.columns else 'OUT-Q1.12.1a'
-        
-        sub_col_out = next((c for c in out_df.columns if c.lower() in ['submittername', 'username']), None)
-        date_col_out = next((c for c in out_df.columns if c.lower() == 'today'), 'SubmissionDate')
 
-        std_out['Participant_ID'] = out_df[id_col_out].astype(str).str.strip().str.upper() if id_col_out in out_df.columns else pd.Series(dtype=str)
+        std_out['Participant ID'] = out_df[id_col_out].astype(str).str.strip().str.upper() if id_col_out in out_df.columns else pd.Series(dtype=str)
         std_out['OUT_Height'] = pd.to_numeric(out_df[ht_col_out], errors='coerce') if ht_col_out in out_df.columns else np.nan
         std_out['OUT_Weight'] = pd.to_numeric(out_df[wt_col_out], errors='coerce') if wt_col_out in out_df.columns else np.nan
-        std_out['OUT_Submitter'] = out_df[sub_col_out] if sub_col_out else "Unknown"
-        std_out['OUT_Date'] = out_df[date_col_out] if date_col_out in out_df.columns else np.nan
 
-    # Ensure no entirely blank rows merge
-    std_enr = std_enr.dropna(subset=['Participant_ID'])
+    std_enr = std_enr.dropna(subset=['Participant ID'])
     if not std_out.empty:
-        std_out = std_out.dropna(subset=['Participant_ID'])
-        merged_df = pd.merge(std_enr, std_out, on="Participant_ID", how="left")
+        std_out = std_out.dropna(subset=['Participant ID'])
+        merged_df = pd.merge(std_enr, std_out, on="Participant ID", how="left")
     else:
         merged_df = std_enr.copy()
-        for col in ['OUT_Height', 'OUT_Weight', 'OUT_Submitter', 'OUT_Date']:
+        for col in ['OUT_Height', 'OUT_Weight']:
             merged_df[col] = np.nan
 
-    # Resolve Final Values
-    merged_df['Final_Height_cm'] = merged_df['ENR_Height'].fillna(merged_df['OUT_Height'])
-    merged_df['Final_Weight_kg'] = merged_df['ENR_Weight'].fillna(merged_df['OUT_Weight'])
+    # Resolve Final Values & Set Up Specific Requested Columns
+    merged_df['Height Recorded'] = merged_df['ENR_Height'].fillna(merged_df['OUT_Height'])
+    merged_df['Weight Recorded'] = merged_df['ENR_Weight'].fillna(merged_df['OUT_Weight'])
 
-    merged_df['Height_Source'] = np.where(merged_df['ENR_Height'].notna(), 'Enrolment', 
+    merged_df['Source_Height'] = np.where(merged_df['ENR_Height'].notna(), 'Enrolment', 
                                  np.where(merged_df['OUT_Height'].notna(), 'Outcome', 'Missing'))
     
-    merged_df['Weight_Source'] = np.where(merged_df['ENR_Weight'].notna(), 'Enrolment', 
+    merged_df['Source_Weight'] = np.where(merged_df['ENR_Weight'].notna(), 'Enrolment', 
                                  np.where(merged_df['OUT_Weight'].notna(), 'Outcome', 'Missing'))
 
-    merged_df['Height_Missing'] = merged_df['Final_Height_cm'].isna()
-    merged_df['Weight_Missing'] = merged_df['Final_Weight_kg'].isna()
+    # Background checks for the metric cards
+    merged_df['Height_Missing'] = merged_df['Height Recorded'].isna()
+    merged_df['Weight_Missing'] = merged_df['Weight Recorded'].isna()
+
+    # The new missing boolean: True if EITHER is missing, False if BOTH are recorded
+    merged_df['MISSING Ht/wt'] = merged_df['Height_Missing'] | merged_df['Weight_Missing']
 
     return merged_df
 
@@ -182,19 +168,20 @@ st.divider()
 
 # Data Table Display
 st.subheader("Extracted Participant Data")
+
+# Define the exact columns to show in the UI and Excel download
 columns_to_display = [
-    'Participant_ID', 'City', 'SubmitterName', 'today', 
-    'Final_Height_cm', 'Height_Source', 
-    'Final_Weight_kg', 'Weight_Source'
+    'Participant ID', 'City', 'Height Recorded', 'Weight Recorded', 
+    'Source_Height', 'Source_Weight', 'MISSING Ht/wt'
 ]
 
-# Only display columns that actually exist to avoid Streamlit errors
 display_cols = [c for c in columns_to_display if c in filtered_df.columns]
 st.dataframe(filtered_df[display_cols], use_container_width=True)
 
 # Excel Download
 st.subheader("Export Data")
-excel_data = convert_df_to_excel(filtered_df)
+# Ensure only the strictly required columns are exported to the spreadsheet
+excel_data = convert_df_to_excel(filtered_df[display_cols])
 st.download_button(
     label="📥 Download Data as Excel",
     data=excel_data,
