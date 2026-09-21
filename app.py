@@ -62,12 +62,15 @@ def process_anthropometry_data(enr_df, out_df):
     site_col_enr = 'ENR_BINFO-Q1_2' if 'ENR_BINFO-Q1_2' in enr_df.columns else 'ENR_BINFO-Q1.2'
     ht_col_enr = 'ENR_FAHA-Q3_5_1' if 'ENR_FAHA-Q3_5_1' in enr_df.columns else 'ENR_FAHA-Q3.5.1'
     wt_col_enr = 'ENR_FAHA-Q3_6_1' if 'ENR_FAHA-Q3_6_1' in enr_df.columns else 'ENR_FAHA-Q3.6.1'
+    
+    date_col_enr = next((c for c in enr_df.columns if c.lower() == 'today'), 'SubmissionDate')
 
     std_enr = pd.DataFrame()
     std_enr['Participant ID'] = enr_df[id_col_enr].astype(str).str.strip().str.upper() if id_col_enr in enr_df.columns else pd.Series(dtype=str)
     std_enr['Site_Code'] = enr_df[site_col_enr] if site_col_enr in enr_df.columns else np.nan
     std_enr['ENR_Height'] = pd.to_numeric(enr_df[ht_col_enr], errors='coerce') if ht_col_enr in enr_df.columns else np.nan
     std_enr['ENR_Weight'] = pd.to_numeric(enr_df[wt_col_enr], errors='coerce') if wt_col_enr in enr_df.columns else np.nan
+    std_enr['today'] = enr_df[date_col_enr] if date_col_enr in enr_df.columns else np.nan
 
     site_mapping = {
         "NC": "NCT DELHI", "JO": "JODHPUR", "GU": "GUWAHATI",
@@ -80,10 +83,12 @@ def process_anthropometry_data(enr_df, out_df):
         id_col_out = 'OUT-P_ID' if 'OUT-P_ID' in out_df.columns else 'OUT-P.ID'
         ht_col_out = 'OUT-Q1_11_1a' if 'OUT-Q1_11_1a' in out_df.columns else 'OUT-Q1.11.1a'
         wt_col_out = 'OUT-Q1_12_1a' if 'OUT-Q1_12_1a' in out_df.columns else 'OUT-Q1.12.1a'
+        date_col_out = next((c for c in out_df.columns if c.lower() == 'today'), 'SubmissionDate')
 
         std_out['Participant ID'] = out_df[id_col_out].astype(str).str.strip().str.upper() if id_col_out in out_df.columns else pd.Series(dtype=str)
         std_out['OUT_Height'] = pd.to_numeric(out_df[ht_col_out], errors='coerce') if ht_col_out in out_df.columns else np.nan
         std_out['OUT_Weight'] = pd.to_numeric(out_df[wt_col_out], errors='coerce') if wt_col_out in out_df.columns else np.nan
+        std_out['OUT_Date'] = out_df[date_col_out] if date_col_out in out_df.columns else np.nan
 
     std_enr = std_enr.dropna(subset=['Participant ID'])
     if not std_out.empty:
@@ -91,10 +96,10 @@ def process_anthropometry_data(enr_df, out_df):
         merged_df = pd.merge(std_enr, std_out, on="Participant ID", how="left")
     else:
         merged_df = std_enr.copy()
-        for col in ['OUT_Height', 'OUT_Weight']:
+        for col in ['OUT_Height', 'OUT_Weight', 'OUT_Date']:
             merged_df[col] = np.nan
 
-    # Resolve Final Values & Set Up Specific Requested Columns
+    # Resolve Final Values
     merged_df['Height Recorded'] = merged_df['ENR_Height'].fillna(merged_df['OUT_Height'])
     merged_df['Weight Recorded'] = merged_df['ENR_Weight'].fillna(merged_df['OUT_Weight'])
 
@@ -104,11 +109,19 @@ def process_anthropometry_data(enr_df, out_df):
     merged_df['Source_Weight'] = np.where(merged_df['ENR_Weight'].notna(), 'Enrolment', 
                                  np.where(merged_df['OUT_Weight'].notna(), 'Outcome', 'Missing'))
 
-    # Background checks for the metric cards
+    # Resolve Date of Recording (Enrolment takes priority if data exists there, else Outcome)
+    merged_df['Date Recorded'] = np.where(
+        (merged_df['Source_Height'] == 'Enrolment') | (merged_df['Source_Weight'] == 'Enrolment'), 
+        merged_df['today'], 
+        np.where(
+            (merged_df['Source_Height'] == 'Outcome') | (merged_df['Source_Weight'] == 'Outcome'), 
+            merged_df['OUT_Date'], 
+            np.nan
+        )
+    )
+
     merged_df['Height_Missing'] = merged_df['Height Recorded'].isna()
     merged_df['Weight_Missing'] = merged_df['Weight Recorded'].isna()
-
-    # The new missing boolean: True if EITHER is missing, False if BOTH are recorded
     merged_df['MISSING Ht/wt'] = merged_df['Height_Missing'] | merged_df['Weight_Missing']
 
     return merged_df
@@ -148,37 +161,52 @@ selected_cities = st.sidebar.multiselect(
 filtered_df = df[df['City'].isin(selected_cities)]
 
 st.subheader("Data Quality: Missing Anthropometry Metrics")
-st.markdown("Displays counts of participants where height or weight is missing in **both** Enrolment and Outcome forms.")
+st.markdown("Displays counts and percentages of participants where height or weight is missing.")
 
-# Dynamic Metric Cards
 # Dynamic Summary Table
 if not selected_cities:
     st.info("Please select at least one site from the sidebar.")
 else:
-    # Build a summary dataframe for the selected sites
     summary_data = []
     for city in selected_cities:
         city_data = filtered_df[filtered_df['City'] == city]
+        total_enrolments = len(city_data)
+        missing_ht = int(city_data['Height_Missing'].sum())
+        missing_wt = int(city_data['Weight_Missing'].sum())
+        missing_either = int(city_data['MISSING Ht/wt'].sum())
+        pct_missing = (missing_either / total_enrolments * 100) if total_enrolments > 0 else 0
+        
         summary_data.append({
             "Site (City)": city,
-            "Missing Height": int(city_data['Height_Missing'].sum()),
-            "Missing Weight": int(city_data['Weight_Missing'].sum()),
-            "Missing Either (Ht/Wt)": int(city_data['MISSING Ht/wt'].sum())
+            "Total Enrolments": total_enrolments,
+            "Missing Height": missing_ht,
+            "Missing Weight": missing_wt,
+            "Missing Either (Ht/Wt)": missing_either,
+            "% Missing": f"{pct_missing:.1f}%"
         })
     
     summary_df = pd.DataFrame(summary_data)
     
-    # Append a Total row for quick overview
     if not summary_df.empty:
+        # Calculate Totals
+        tot_enrol = summary_df["Total Enrolments"].sum()
+        tot_miss_ht = summary_df["Missing Height"].sum()
+        tot_miss_wt = summary_df["Missing Weight"].sum()
+        tot_miss_either = summary_df["Missing Either (Ht/Wt)"].sum()
+        tot_pct = (tot_miss_either / tot_enrol * 100) if tot_enrol > 0 else 0
+        
         total_row = pd.DataFrame([{
             "Site (City)": "TOTAL",
-            "Missing Height": summary_df["Missing Height"].sum(),
-            "Missing Weight": summary_df["Missing Weight"].sum(),
-            "Missing Either (Ht/Wt)": summary_df["Missing Either (Ht/Wt)"].sum()
+            "Total Enrolments": tot_enrol,
+            "Missing Height": tot_miss_ht,
+            "Missing Weight": tot_miss_wt,
+            "Missing Either (Ht/Wt)": tot_miss_either,
+            "% Missing": f"{tot_pct:.1f}%"
         }])
+        
         summary_df = pd.concat([summary_df, total_row], ignore_index=True)
         
-        # Apply slight styling to highlight the Total row
+        # Apply styling to highlight the Total row
         def style_total_row(row):
             if row['Site (City)'] == 'TOTAL':
                 return ['background-color: #f0f2f6; font-weight: bold'] * len(row)
@@ -193,10 +221,9 @@ st.divider()
 # Data Table Display
 st.subheader("Extracted Participant Data")
 
-# Define the exact columns to show in the UI and Excel download
 columns_to_display = [
     'Participant ID', 'City', 'Height Recorded', 'Weight Recorded', 
-    'Source_Height', 'Source_Weight', 'MISSING Ht/wt'
+    'Source_Height', 'Source_Weight', 'Date Recorded', 'MISSING Ht/wt'
 ]
 
 display_cols = [c for c in columns_to_display if c in filtered_df.columns]
@@ -204,7 +231,6 @@ st.dataframe(filtered_df[display_cols], use_container_width=True)
 
 # Excel Download
 st.subheader("Export Data")
-# Ensure only the strictly required columns are exported to the spreadsheet
 excel_data = convert_df_to_excel(filtered_df[display_cols])
 st.download_button(
     label="📥 Download Data as Excel",
